@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Browser Assistant</title>
+  <link rel="stylesheet" href="sidebar.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <div class="header-logo">✦</div>
+        <div>
+          <div class="header-title">AI Assistant</div>
+          <div class="header-subtitle" id="headerSubtitle">Powered by Gemini</div>
+        </div>
+      </div>
+      <button class="settings-btn" id="settingsBtn" title="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path>
+        </svg>
+      </button>
+    </header>
+
+    <!-- Chat Area -->
+    <div class="chat-area" id="chatArea">
+      <div class="empty-state" id="emptyState">
+        <div class="empty-state-icon">💬</div>
+        <div class="empty-state-title">Start a conversation...</div>
+        <div class="empty-state-subtitle">Ask me anything about your browser tabs or the page you're viewing.</div>
+      </div>
+      <div class="typing-indicator" id="typingIndicator">
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+      </div>
+    </div>
+
+    <!-- Budget Bar (Opt 6/7) -->
+    <div class="budget-bar" id="budgetBar">
+      <div class="budget-item">
+        <span class="budget-dot green" id="budgetDot"></span>
+        <span id="budgetText">15 req/min left</span>
+      </div>
+      <div class="budget-item" id="ollamaIndicator" style="display:none">
+        <span class="budget-dot green" id="ollamaDot"></span>
+        <span id="ollamaLabel">🦙 Local</span>
+      </div>
+      <div class="budget-mode" id="budgetMode" title="Click to change quota mode">⚡ Lite</div>
+    </div>
+
+    <!-- Input Area -->
+    <div class="input-area">
+      <div class="input-wrapper">
+        <textarea class="input-field" id="messageInput" placeholder="Ask me anything..." rows="1"></textarea>
+        <button class="send-btn" id="sendBtn" title="Send message">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Modal -->
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">⚙️ Settings</div>
+        <button class="modal-close" id="modalClose">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Provider Selector -->
+      <div class="form-group">
+        <label class="form-label">AI Provider</label>
+        <div class="provider-cards" id="providerCards">
+          <label class="provider-card active" id="cardGemini" data-provider="gemini">
+            <input type="radio" name="provider" value="gemini" checked hidden>
+            <div class="provider-card-icon">✦</div>
+            <div class="provider-card-info">
+              <div class="provider-card-name">Gemini</div>
+              <div class="provider-card-model">gemini-2.5-flash</div>
+              <div class="provider-card-desc">Google AI</div>
+            </div>
+          </label>
+          <label class="provider-card" id="cardGroq" data-provider="groq">
+            <input type="radio" name="provider" value="groq" hidden>
+            <div class="provider-card-icon">⚡</div>
+            <div class="provider-card-info">
+              <div class="provider-card-name">Groq</div>
+              <div class="provider-card-model">llama-3.3-70b</div>
+              <div class="provider-card-desc">Fast inference</div>
+            </div>
+          </label>
+          <label class="provider-card" id="cardCerebras" data-provider="cerebras">
+            <input type="radio" name="provider" value="cerebras" hidden>
+            <div class="provider-card-icon">🧠</div>
+            <div class="provider-card-info">
+              <div class="provider-card-name">Cerebras</div>
+              <div class="provider-card-model">llama-3.3-70b</div>
+              <div class="provider-card-desc">Ultra-fast</div>
+            </div>
+          </label>
+          <label class="provider-card" id="cardTogether" data-provider="together">
+            <input type="radio" name="provider" value="together" hidden>
+            <div class="provider-card-icon">🤝</div>
+            <div class="provider-card-info">
+              <div class="provider-card-name">Together</div>
+              <div class="provider-card-model">llama-3.3-70b-turbo</div>
+              <div class="provider-card-desc">$1 free credit</div>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Multi-Key Manager -->
+      <div class="form-group">
+        <label class="form-label">API Keys <span class="key-count-badge" id="keyCountBadge"></span></label>
+        <div class="api-keys-list" id="apiKeysList"></div>
+
+        <!-- Add key form (hidden by default) -->
+        <div class="add-key-form" id="addKeyForm" style="display:none">
+          <select class="form-input form-select" id="newKeyProvider">
+            <option value="gemini">✦ Gemini (Google AI Studio)</option>
+            <option value="groq">⚡ Groq</option>
+            <option value="cerebras">🧠 Cerebras</option>
+            <option value="together">🤝 Together AI</option>
+          </select>
+          <input type="text" class="form-input" id="newKeyLabel" placeholder="Label (e.g. Account 2)" maxlength="30">
+          <input type="password" class="form-input" id="newKeyValue" placeholder="Paste API key here...">
+          <div class="add-key-actions">
+            <button class="btn btn-primary btn-sm" id="confirmAddKey">Add Key</button>
+            <button class="btn btn-secondary btn-sm" id="cancelAddKey">Cancel</button>
+          </div>
+        </div>
+
+        <button class="btn btn-secondary btn-sm" id="addKeyBtn" style="margin-top:8px">+ Add API Key</button>
+        <div class="form-hint">
+          Add keys from multiple accounts for automatic rotation.
+          Get free keys: <a href="https://aistudio.google.com/apikey" target="_blank">Gemini</a> ·
+          <a href="https://console.groq.com/keys" target="_blank">Groq</a> ·
+          <a href="https://cloud.cerebras.ai/" target="_blank">Cerebras</a> ·
+          <a href="https://api.together.ai/" target="_blank">Together</a>
+        </div>
+      </div>
+
+      <!-- Quota Mode (Opt 7) -->
+      <div class="form-group">
+        <label class="form-label">Quota Mode</label>
+        <div class="quota-mode-cards" id="quotaModeCards">
+          <label class="quota-card" id="cardFull" data-mode="full">
+            <input type="radio" name="quotaMode" value="full" hidden>
+            <div class="quota-card-name">🚀 Full</div>
+            <div class="quota-card-desc">All tools, 8 steps</div>
+          </label>
+          <label class="quota-card active" id="cardLite" data-mode="lite">
+            <input type="radio" name="quotaMode" value="lite" hidden checked>
+            <div class="quota-card-name">⚡ Lite</div>
+            <div class="quota-card-desc">Smart tools, 5 steps</div>
+          </label>
+          <label class="quota-card" id="cardChat" data-mode="chat">
+            <input type="radio" name="quotaMode" value="chat" hidden>
+            <div class="quota-card-name">💬 Chat</div>
+            <div class="quota-card-desc">No tools, 6 msg</div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Local AI (Ollama) -->
+      <div class="form-group">
+        <label class="form-label">Local AI (Ollama)</label>
+        <div class="ollama-status" id="ollamaStatus">
+          <div class="ollama-info">
+            <span class="ollama-icon" id="ollamaStatusIcon">❌</span>
+            <span id="ollamaStatusText">Not detected</span>
+          </div>
+        </div>
+        <div class="form-hint">
+          Install <a href="https://ollama.com" target="_blank">Ollama</a> for free unlimited local chat.
+          Simple questions go to Ollama, tool calls go to API.
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="modalCancel">Cancel</button>
+        <button class="btn btn-primary" id="modalSave">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script type="module" src="sidebar.js"></script>
+</body>
+</html>
