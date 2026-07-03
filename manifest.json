@@ -3,7 +3,7 @@
   "name": "AI Browser Assistant",
   "version": "1.0.0",
   "description": "AI-powered browser assistant using Gemini API",
-  "permissions": ["sidePanel", "storage", "scripting", "tabs", "activeTab", "history"],
+  "permissions": ["sidePanel", "storage", "scripting", "tabs", "activeTab", "history", "tabCapture"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": {
     "service_worker": "background.js",

@@ -101,49 +101,79 @@ window.__aiAssistant.extractMainContent = function() {
  */
 window.__aiAssistant.extractPageContent = function() {
   const sections = [];
-  const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
-
-  if (headings.length === 0) {
-    // Try smart content extraction first (Mini-Readability)
-    const mainContent = window.__aiAssistant.extractMainContent();
-    const finalContent = mainContent || (document.body?.innerText?.trim() || '');
-    if (finalContent) {
-      sections.push({
-        id: 'section-0',
-        heading: document.title || 'Page Content',
-        content: finalContent.substring(0, 15000)
-      });
+  
+  let currentSection = {
+    id: 'section-0',
+    heading: document.title || 'Introduction',
+    contentParts: []
+  };
+  
+  sections.push(currentSection);
+  let headingIndex = 1;
+  
+  function walk(node) {
+    if (!node) return;
+    
+    const tagName = node.tagName?.toLowerCase();
+    if (['script', 'style', 'nav', 'footer', 'header', 'noscript', 'iframe', 'svg'].includes(tagName)) {
+      return;
     }
-    return sections;
+    
+    // Check if it's a heading
+    if (/^h[1-6]$/.test(tagName)) {
+      const headingText = node.innerText.trim();
+      if (headingText) {
+        const sectionId = `section-${headingIndex++}`;
+        node.setAttribute('data-ai-section-id', sectionId);
+        currentSection = {
+          id: sectionId,
+          heading: headingText,
+          contentParts: []
+        };
+        sections.push(currentSection);
+      }
+      return;
+    }
+    
+    // If it's a leaf text block, collect it
+    if (['p', 'li', 'dd', 'dt', 'pre', 'code'].includes(tagName)) {
+      const text = node.innerText.trim();
+      if (text && text.length > 5) {
+        currentSection.contentParts.push(text);
+      }
+      return;
+    }
+    
+    // Fallback for divs or sections containing raw text
+    if (tagName === 'div' || tagName === 'section' || tagName === 'article') {
+      const hasBlockChildren = Array.from(node.children).some(child => 
+        ['p', 'div', 'section', 'article', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(child.tagName.toLowerCase())
+      );
+      if (!hasBlockChildren) {
+        const text = node.innerText.trim();
+        if (text && text.length > 10) {
+          currentSection.contentParts.push(text);
+        }
+        return;
+      }
+    }
+    
+    for (let child = node.firstChild; child; child = child.nextSibling) {
+      if (child.nodeType === 1) {
+        walk(child);
+      }
+    }
   }
-
-  headings.forEach((heading, index) => {
-    const sectionId = `section-${index}`;
-
-    // Mark the heading element with the section ID for highlighting
-    heading.setAttribute('data-ai-section-id', sectionId);
-
-    const headingText = heading.innerText.trim();
-    const contentParts = [];
-
-    // Collect siblings until the next heading
-    let sibling = heading.nextElementSibling;
-    while (sibling) {
-      const tagName = sibling.tagName.toLowerCase();
-      if (/^h[1-6]$/.test(tagName)) break;
-      const text = sibling.innerText?.trim();
-      if (text) contentParts.push(text);
-      sibling = sibling.nextElementSibling;
-    }
-
-    sections.push({
-      id: sectionId,
-      heading: headingText,
-      content: contentParts.join('\n')
-    });
-  });
-
-  return sections;
+  
+  if (document.body) {
+    walk(document.body);
+  }
+  
+  return sections.map(sec => ({
+    id: sec.id,
+    heading: sec.heading,
+    content: sec.contentParts.join('\n')
+  })).filter(sec => sec.content.trim().length > 0 || sec.heading !== 'Introduction');
 };
 
 /**
@@ -183,3 +213,207 @@ window.__aiAssistant.clearHighlights = function() {
   const highlighted = document.querySelectorAll(`.${HIGHLIGHT_CLASS}`);
   highlighted.forEach(el => el.classList.remove(HIGHLIGHT_CLASS));
 };
+
+// ─── Smart Content Extraction & Caching ─────────────────────────────
+
+// Cache nội dung trang trên client-side để tái sử dụng
+let __pageContentCache = null;
+
+/**
+ * Trích xuất nội dung chính của trang một cách thông minh.
+ * Trả về bản tóm tắt ngắn (≤300 token) + cache chunks cho lazy loading.
+ * 
+ * @param {number} [sectionIndex] - Nếu có, trả về chi tiết section cụ thể từ cache.
+ * @returns {object} {title, url, summary, headings, totalChunks, cachedAt} hoặc {sectionContent}
+ */
+window.__aiAssistant.extractSmartContent = function(sectionIndex) {
+  const currentUrl = location.href;
+
+  // Nếu yêu cầu section cụ thể → trả từ cache
+  if (sectionIndex !== undefined && sectionIndex !== null) {
+    if (!__pageContentCache || __pageContentCache.url !== currentUrl) {
+      // Cache chưa có → build cache trước
+      buildContentCache();
+    }
+    const chunk = __pageContentCache?.chunks?.[sectionIndex];
+    if (chunk) {
+      return {
+        success: true,
+        sectionIndex: sectionIndex,
+        heading: chunk.heading,
+        content: chunk.content,
+        totalChunks: __pageContentCache.chunks.length
+      };
+    }
+    return { success: false, error: `Section ${sectionIndex} không tồn tại. Tổng: ${__pageContentCache?.chunks?.length || 0} sections.` };
+  }
+
+  // Overview mode: build cache nếu chưa có hoặc URL đã đổi
+  if (!__pageContentCache || __pageContentCache.url !== currentUrl) {
+    buildContentCache();
+  }
+
+  const cache = __pageContentCache;
+  
+  // Tạo bản tóm tắt ngắn gọn (≤300 token ≈ 1200 ký tự)
+  let summary = '';
+  
+  // Lấy 3 đoạn nội dung đầu tiên (mỗi đoạn ≤400 chars)
+  const leadChunks = cache.chunks.slice(0, 3);
+  for (const chunk of leadChunks) {
+    const preview = chunk.content.substring(0, 400);
+    if (chunk.heading && chunk.heading !== document.title) {
+      summary += `## ${chunk.heading}\n`;
+    }
+    summary += preview;
+    if (chunk.content.length > 400) summary += '...';
+    summary += '\n\n';
+  }
+
+  return {
+    success: true,
+    title: cache.title,
+    url: cache.url,
+    summary: summary.trim(),
+    headings: cache.chunks.map((c, i) => `[${i}] ${c.heading}`),
+    totalChunks: cache.chunks.length,
+    cachedAt: cache.cachedAt
+  };
+};
+
+/**
+ * Tìm kiếm từ khóa trên trang. Trả về các đoạn chứa kết quả.
+ * @param {string} query - Từ khóa cần tìm.
+ * @returns {object} {results: [{heading, snippet, sectionIndex}]}
+ */
+window.__aiAssistant.searchInPage = function(query) {
+  if (!query) return { success: false, error: 'Vui lòng cung cấp từ khóa tìm kiếm.' };
+
+  const currentUrl = location.href;
+  if (!__pageContentCache || __pageContentCache.url !== currentUrl) {
+    buildContentCache();
+  }
+
+  const normalizedQuery = query.toLowerCase().trim();
+  const queryWords = normalizedQuery.split(/\s+/).filter(w => w.length > 1);
+  const results = [];
+
+  for (let i = 0; i < __pageContentCache.chunks.length; i++) {
+    const chunk = __pageContentCache.chunks[i];
+    const lowerContent = chunk.content.toLowerCase();
+    const lowerHeading = chunk.heading.toLowerCase();
+
+    let score = 0;
+    let matchPositions = [];
+
+    for (const word of queryWords) {
+      // Tìm trong heading (trọng số cao)
+      if (lowerHeading.includes(word)) score += 10;
+      
+      // Tìm trong content
+      let pos = lowerContent.indexOf(word);
+      while (pos !== -1) {
+        score += 2;
+        matchPositions.push(pos);
+        pos = lowerContent.indexOf(word, pos + word.length);
+      }
+    }
+
+    if (score > 0) {
+      // Trích xuất snippet xung quanh vị trí match đầu tiên
+      let snippet = '';
+      if (matchPositions.length > 0) {
+        const start = Math.max(0, matchPositions[0] - 60);
+        const end = Math.min(chunk.content.length, matchPositions[0] + 200);
+        snippet = (start > 0 ? '...' : '') + chunk.content.substring(start, end) + (end < chunk.content.length ? '...' : '');
+      } else {
+        snippet = chunk.content.substring(0, 200) + (chunk.content.length > 200 ? '...' : '');
+      }
+
+      results.push({
+        sectionIndex: i,
+        heading: chunk.heading,
+        snippet: snippet,
+        score: score
+      });
+    }
+  }
+
+  // Sắp xếp theo score giảm dần, lấy top 5
+  results.sort((a, b) => b.score - a.score);
+  const topResults = results.slice(0, 5);
+
+  return {
+    success: true,
+    query: query,
+    resultCount: results.length,
+    results: topResults
+  };
+};
+
+/**
+ * Xây dựng cache nội dung trang từ DOM.
+ * Sử dụng extractMainContent() (readability) trước, fallback sang extractPageContent() (heading-based).
+ */
+function buildContentCache() {
+  const title = document.title || '';
+  const url = location.href;
+  const chunks = [];
+
+  // Thử readability-style extraction trước
+  const mainContent = window.__aiAssistant.extractMainContent();
+  
+  if (mainContent && mainContent.length > 200) {
+    // Cắt thành chunks theo đoạn văn
+    const paragraphs = mainContent.split(/\n{2,}/);
+    let currentChunk = { heading: title, content: '' };
+    
+    for (const para of paragraphs) {
+      const trimmed = para.trim();
+      if (!trimmed || trimmed.length < 10) continue;
+      
+      // Nếu đoạn hiện tại đã quá dài, tạo chunk mới
+      if (currentChunk.content.length > 800) {
+        chunks.push({ ...currentChunk });
+        currentChunk = { heading: `(tiếp theo)`, content: '' };
+      }
+      
+      currentChunk.content += (currentChunk.content ? '\n' : '') + trimmed;
+    }
+    
+    if (currentChunk.content.length > 0) {
+      chunks.push(currentChunk);
+    }
+  }
+
+  // Fallback hoặc bổ sung: heading-based sections
+  if (chunks.length === 0) {
+    const sections = window.__aiAssistant.extractPageContent();
+    for (const sec of sections) {
+      if (sec.content.trim().length < 10) continue;
+      
+      // Cắt section dài thành nhiều chunks
+      if (sec.content.length > 1000) {
+        const subParts = sec.content.split(/\n/);
+        let subChunk = { heading: sec.heading, content: '' };
+        for (const part of subParts) {
+          if (subChunk.content.length > 800) {
+            chunks.push({ ...subChunk });
+            subChunk = { heading: `${sec.heading} (tiếp)`, content: '' };
+          }
+          subChunk.content += (subChunk.content ? '\n' : '') + part;
+        }
+        if (subChunk.content.length > 0) chunks.push(subChunk);
+      } else {
+        chunks.push({ heading: sec.heading, content: sec.content });
+      }
+    }
+  }
+
+  __pageContentCache = {
+    title,
+    url,
+    chunks,
+    cachedAt: Date.now()
+  };
+}

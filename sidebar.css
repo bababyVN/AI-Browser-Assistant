@@ -144,7 +144,10 @@ body{font-family:var(--font-family);font-size:14px;line-height:1.6;color:var(--t
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);z-index:100;align-items:center;justify-content:center;animation:fadeIn .2s ease}
 .modal-overlay.visible{display:flex}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
-.modal{background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-xl);padding:28px;width:90%;max-width:380px;box-shadow:var(--shadow-lg);backdrop-filter:blur(20px);animation:modalIn .3s ease}
+.modal{background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-xl);padding:28px;width:90%;max-width:380px;max-height:85vh;overflow-y:auto;box-shadow:var(--shadow-lg);backdrop-filter:blur(20px);animation:modalIn .3s ease}
+.modal::-webkit-scrollbar{width:5px}
+.modal::-webkit-scrollbar-track{background:transparent}
+.modal::-webkit-scrollbar-thumb{background:var(--border);border-radius:10px}
 @keyframes modalIn{from{opacity:0;transform:scale(.95) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}
 .modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
 .modal-title{font-size:17px;font-weight:600}
@@ -250,4 +253,40 @@ body{font-family:var(--font-family);font-size:14px;line-height:1.6;color:var(--t
 .tier-badge.cloud {
   background: rgba(108, 99, 255, 0.15);
   color: #6c63ff;
+}
+.tier-badge.nano {
+  background: rgba(255, 193, 7, 0.15);
+  color: #ffca28;
+}
+.tier-badge.smart {
+  background: rgba(155, 89, 182, 0.15);
+  color: #a855f7;
+  letter-spacing: 0.01em;
+}
+.tier-badge.cache {
+  background: rgba(0, 188, 212, 0.15);
+  color: #26c6da;
+}
+
+.header-mode-select {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+  appearance: none;
+  -webkit-appearance: none;
+}
+.header-mode-select:hover {
+  border-color: rgba(108, 99, 255, 0.4);
+  background: var(--border);
+}
+.header-mode-select option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
 }

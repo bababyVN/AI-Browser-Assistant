@@ -3,6 +3,8 @@
  * Chat interface, markdown rendering, tool cards, settings modal
  */
 
+import { loadApiConfigs, saveApiConfigs } from './lib/router.js';
+
 // ─── DOM Elements ───────────────────────────────────────────────────
 const chatArea = document.getElementById('chatArea');
 const emptyState = document.getElementById('emptyState');
@@ -15,28 +17,35 @@ const modalClose = document.getElementById('modalClose');
 const modalCancel = document.getElementById('modalCancel');
 const modalSave = document.getElementById('modalSave');
 const cardGemini = document.getElementById('cardGemini');
-const cardGroq = document.getElementById('cardGroq');
-const cardCerebras = document.getElementById('cardCerebras');
-const cardTogether = document.getElementById('cardTogether');
+const cardOpenAI = document.getElementById('cardOpenAI');
+const cardOpenRouter = document.getElementById('cardOpenRouter');
 const headerSubtitle = document.getElementById('headerSubtitle');
 const toast = document.getElementById('toast');
 // Multi-key UI
 const apiKeysList = document.getElementById('apiKeysList');
 const keyCountBadge = document.getElementById('keyCountBadge');
 const addKeyBtn = document.getElementById('addKeyBtn');
+const headerModeSelect = document.getElementById('headerModeSelect');
 const addKeyForm = document.getElementById('addKeyForm');
 const newKeyProvider = document.getElementById('newKeyProvider');
 const newKeyLabel = document.getElementById('newKeyLabel');
 const newKeyValue = document.getElementById('newKeyValue');
 const confirmAddKey = document.getElementById('confirmAddKey');
 const cancelAddKey = document.getElementById('cancelAddKey');
-// Budget & Quota DOM refs
-const budgetDot = document.getElementById('budgetDot');
-const budgetText = document.getElementById('budgetText');
-const budgetMode = document.getElementById('budgetMode');
+// Budget & Quota DOM refs (deleted/disabled)
+const budgetDot = null;
+const budgetText = null;
+const budgetMode = null;
 const cardFull = document.getElementById('cardFull');
-const cardLite = document.getElementById('cardLite');
+const cardLite = null;
 const cardChat = document.getElementById('cardChat');
+const openrouterModelGroup = document.getElementById('openrouterModelGroup');
+const openrouterModelInput = document.getElementById('openrouterModelInput');
+const debugModeCheckbox = document.getElementById('debugModeCheckbox');
+const debugPanel = document.getElementById('debugPanel');
+const debugClose = document.getElementById('debugClose');
+const debugSentPrompt = document.getElementById('debugSentPrompt');
+const debugReceivedResponse = document.getElementById('debugReceivedResponse');
 
 let isWaiting = false;
 
@@ -146,21 +155,12 @@ function addUserMessage(text) {
 
 function addAssistantMessage(text, options = {}) {
   hideEmptyState();
-  
-  let badgeHtml = '';
-  if (options.tier === 'direct') {
-    badgeHtml = '<span class="tier-badge direct" title="Direct execution (No AI)">⚡</span>';
-  } else if (options.fromOllama) {
-    badgeHtml = '<span class="tier-badge local" title="Local AI">🦙</span>';
-  } else if (!options.fromCache) {
-    badgeHtml = '<span class="tier-badge cloud" title="Cloud AI">☁️</span>';
-  }
 
   const div = document.createElement('div');
   div.className = 'message message-assistant';
   div.innerHTML = `
     <div class="message-bubble">${renderMarkdown(text)}</div>
-    <div class="message-time">${getTimestamp()}${badgeHtml}</div>
+    <div class="message-time">${getTimestamp()}</div>
   `;
   chatArea.insertBefore(div, typingIndicator);
   scrollToBottom();
@@ -321,7 +321,7 @@ let currentModalProvider = 'gemini';
 
 function updateProviderUI(provider) {
   currentModalProvider = provider;
-  const allCards = [cardGemini, cardGroq, cardCerebras, cardTogether];
+  const allCards = [cardGemini, cardOpenAI, cardOpenRouter].filter(Boolean);
   allCards.forEach(c => {
     if (!c) return;
     const p = c.dataset.provider;
@@ -329,21 +329,23 @@ function updateProviderUI(provider) {
     const radio = c.querySelector('input');
     if (radio) radio.checked = p === provider;
   });
+  if (openrouterModelGroup) {
+    openrouterModelGroup.style.display = (provider === 'openrouter') ? 'block' : 'none';
+  }
 }
 
 function updateHeaderSubtitle(provider) {
-  const names = { gemini: 'Gemini', groq: 'Groq', cerebras: 'Cerebras', together: 'Together AI', ollama: 'Ollama (local)' };
+  const names = { gemini: 'Gemini', openai: 'OpenAI', openrouter: 'OpenRouter' };
   if (headerSubtitle) headerSubtitle.textContent = `Powered by ${names[provider] || provider}`;
 }
-
 // ─── Quota Mode State ───────────────────────────────────────────
-let currentModalQuotaMode = 'lite';
+let currentModalQuotaMode = 'full';
 
-const QUOTA_MODE_LABELS = { full: '🚀 Full', lite: '⚡ Lite', chat: '💬 Chat' };
+const QUOTA_MODE_LABELS = { full: '🚀 Full', chat: '💬 Chat' };
 
 function updateQuotaModeUI(mode) {
   currentModalQuotaMode = mode;
-  [cardFull, cardLite, cardChat].forEach(c => {
+  [cardFull, cardLite, cardChat].filter(Boolean).forEach(c => {
     const m = c.dataset.mode;
     c.classList.toggle('active', m === mode);
     c.querySelector('input').checked = m === mode;
@@ -351,7 +353,7 @@ function updateQuotaModeUI(mode) {
 }
 
 function updateBudgetModeLabel(mode) {
-  if (budgetMode) budgetMode.textContent = QUOTA_MODE_LABELS[mode] || '⚡ Lite';
+  if (budgetMode) budgetMode.textContent = QUOTA_MODE_LABELS[mode] || '';
 }
 
 function updateBudgetDisplay(stats) {
@@ -361,16 +363,24 @@ function updateBudgetDisplay(stats) {
   budgetDot.className = 'budget-dot ' + (r > 10 ? 'green' : r > 5 ? 'yellow' : 'red');
 }
 
-cardFull.addEventListener('click', () => updateQuotaModeUI('full'));
-cardLite.addEventListener('click', () => updateQuotaModeUI('lite'));
-cardChat.addEventListener('click', () => updateQuotaModeUI('chat'));
-budgetMode.addEventListener('click', () => settingsBtn.click());
+if (cardFull) cardFull.addEventListener('click', () => updateQuotaModeUI('full'));
+if (cardChat) cardChat.addEventListener('click', () => updateQuotaModeUI('chat'));
+
+if (headerModeSelect) {
+  headerModeSelect.addEventListener('change', async (e) => {
+    const mode = e.target.value;
+    currentModalQuotaMode = mode;
+    updateQuotaModeUI(mode);
+    await chrome.storage.local.set({ quotaMode: mode });
+    showToast(`Switched to ${mode === 'chat' ? 'Chat' : 'Full'} mode`, 'success');
+  });
+}
 
 // ─── Multi-Key Management ────────────────────────────────────────
 let currentApiKeys = []; // In-memory copy while modal is open
 
-const PROVIDER_ICONS = { gemini: '✦', groq: '⚡', cerebras: '🧠', together: '🤝' };
-const PROVIDER_NAMES = { gemini: 'Gemini', groq: 'Groq', cerebras: 'Cerebras', together: 'Together AI' };
+const PROVIDER_ICONS = { gemini: '✦', openai: '🟢', openrouter: '🌐' };
+const PROVIDER_NAMES = { gemini: 'Gemini', openai: 'OpenAI', openrouter: 'OpenRouter' };
 
 function renderKeyList(keys) {
   currentApiKeys = keys;
@@ -382,14 +392,17 @@ function renderKeyList(keys) {
     return;
   }
 
-  apiKeysList.innerHTML = keys.map((k, i) => `
-    <div class="api-key-row" data-index="${i}">
-      <span class="key-provider-badge key-${k.provider}">${PROVIDER_ICONS[k.provider] || '🔑'}</span>
-      <span class="key-label">${escapeHtml(k.label || PROVIDER_NAMES[k.provider] + ' ' + (i + 1))}</span>
-      <span class="key-preview">···${escapeHtml(k.key.slice(-6))}</span>
-      <button class="key-remove" data-index="${i}" title="Remove key">✕</button>
-    </div>
-  `).join('');
+  apiKeysList.innerHTML = keys.map((k, i) => {
+    const preview = typeof k.key === 'string' ? k.key.slice(-6) : '******';
+    return `
+      <div class="api-key-row" data-index="${i}">
+        <span class="key-provider-badge key-${k.provider}">${PROVIDER_ICONS[k.provider] || '🔑'}</span>
+        <span class="key-label">${escapeHtml(k.label || PROVIDER_NAMES[k.provider] + ' ' + (i + 1))}</span>
+        <span class="key-preview">···${escapeHtml(preview)}</span>
+        <button class="key-remove" data-index="${i}" title="Remove key">✕</button>
+      </div>
+    `;
+  }).join('');
 
   // Attach remove handlers
   apiKeysList.querySelectorAll('.key-remove').forEach(btn => {
@@ -424,13 +437,17 @@ confirmAddKey.addEventListener('click', () => {
     showToast('Please paste an API key', 'error');
     return;
   }
-  // Basic format validation (only for known prefixes)
-  if (provider === 'gemini' && !key.startsWith('AIza')) {
-    showToast('Gemini keys start with "AIza"', 'error');
+  // Format validation per provider
+  if (provider === 'gemini' && !key.startsWith('AIza') && !key.startsWith('AQ.')) {
+    showToast('Gemini keys must start with "AIza" or "AQ."', 'error');
     return;
   }
-  if (provider === 'groq' && !key.startsWith('gsk_')) {
-    showToast('Groq keys start with "gsk_"', 'error');
+  if (provider === 'openrouter' && !key.startsWith('sk-or-')) {
+    showToast('OpenRouter keys start with "sk-or-"', 'error');
+    return;
+  }
+  if (provider === 'openai' && !key.startsWith('sk-')) {
+    showToast('OpenAI keys start with "sk-"', 'error');
     return;
   }
   if (key.length < 10) {
@@ -454,30 +471,33 @@ confirmAddKey.addEventListener('click', () => {
 
 // ─── Settings Modal ─────────────────────────────────────────────────
 settingsBtn.addEventListener('click', async () => {
-  const data = await chrome.storage.local.get(['aiProvider', 'apiKeys', 'geminiApiKey', 'groqApiKey', 'quotaMode']);
-  const provider = data.aiProvider || 'gemini';
-  updateProviderUI(provider);
-  updateQuotaModeUI(data.quotaMode || 'lite');
+  try {
+    const data = await chrome.storage.local.get(['aiProvider', 'quotaMode', 'openrouterModel', 'debugMode']);
+    const provider = data.aiProvider || 'gemini';
+    updateProviderUI(provider);
+    updateQuotaModeUI(data.quotaMode || 'full');
+    if (openrouterModelInput) {
+      openrouterModelInput.value = data.openrouterModel || 'google/gemini-2.5-flash';
+    }
+    if (debugModeCheckbox) {
+      debugModeCheckbox.checked = !!data.debugMode;
+    }
 
-  // Load keys: prefer new format, fall back to legacy single keys
-  let keys = data.apiKeys || [];
-  if (keys.length === 0) {
-    if (data.geminiApiKey) keys.push({ provider: 'gemini', key: data.geminiApiKey, label: 'Gemini (Account 1)' });
-    if (data.groqApiKey) keys.push({ provider: 'groq', key: data.groqApiKey, label: 'Groq (Account 1)' });
+    // Load keys using the secure router (which decrypts keys on the fly)
+    const keys = await loadApiConfigs();
+    renderKeyList(keys);
+
+    settingsModal.classList.add('visible');
+  } catch (err) {
+    console.error('[Sidebar] Settings click error:', err);
+    showToast(`Error opening settings: ${err.message}`, 'error');
   }
-  renderKeyList(keys);
-
-  // Check Ollama status
-  checkOllamaStatusUI();
-
-  settingsModal.classList.add('visible');
 });
 
 // Provider card click handlers
-cardGemini.addEventListener('click', () => updateProviderUI('gemini'));
-cardGroq.addEventListener('click', () => updateProviderUI('groq'));
-if (cardCerebras) cardCerebras.addEventListener('click', () => updateProviderUI('cerebras'));
-if (cardTogether) cardTogether.addEventListener('click', () => updateProviderUI('together'));
+if (cardGemini) cardGemini.addEventListener('click', () => updateProviderUI('gemini'));
+if (cardOpenAI) cardOpenAI.addEventListener('click', () => updateProviderUI('openai'));
+if (cardOpenRouter) cardOpenRouter.addEventListener('click', () => updateProviderUI('openrouter'));
 
 function closeModal() {
   settingsModal.classList.remove('visible');
@@ -491,42 +511,55 @@ settingsModal.addEventListener('click', (e) => {
 });
 
 modalSave.addEventListener('click', async () => {
-  // Allow saving with 0 keys if Ollama is available
-  if (currentApiKeys.length === 0) {
-    try {
-      const ollamaStatus = await chrome.runtime.sendMessage({ type: 'GET_OLLAMA_STATUS' });
-      if (!ollamaStatus?.available) {
-        showToast('Add at least one API key, or install Ollama for local chat', 'error');
-        return;
-      }
-    } catch {
+  try {
+    if (currentApiKeys.length === 0) {
       showToast('Add at least one API key to save', 'error');
       return;
     }
+
+    // Save keys + settings with encryption
+    await saveApiConfigs(currentApiKeys);
+    const openrouterModel = (openrouterModelInput?.value || '').trim() || 'google/gemini-2.5-flash';
+    const debugMode = !!debugModeCheckbox?.checked;
+    await chrome.storage.local.set({
+      aiProvider: currentModalProvider,
+      quotaMode: currentModalQuotaMode,
+      openrouterModel,
+      debugMode
+    });
+    if (debugPanel) {
+      debugPanel.style.display = debugMode ? 'block' : 'none';
+    }
+
+    updateHeaderSubtitle(currentModalProvider);
+    updateBudgetModeLabel(currentModalQuotaMode);
+    if (headerModeSelect) {
+      headerModeSelect.value = currentModalQuotaMode;
+    }
+    const keyCount = currentApiKeys.length;
+    showToast(`Saved — ${keyCount} API ${keyCount === 1 ? 'key' : 'keys'}, ${QUOTA_MODE_LABELS[currentModalQuotaMode]} mode`, 'success');
+    closeModal();
+  } catch (err) {
+    console.error('[Sidebar] Save settings error:', err);
+    showToast(`Error saving settings: ${err.message}`, 'error');
   }
-
-  // Save keys + settings
-  await chrome.storage.local.set({
-    apiKeys: currentApiKeys,
-    aiProvider: currentModalProvider,
-    quotaMode: currentModalQuotaMode
-  });
-
-  updateHeaderSubtitle(currentModalProvider);
-  updateBudgetModeLabel(currentModalQuotaMode);
-  const keyCount = currentApiKeys.length;
-  const keyMsg = keyCount > 0 ? `${keyCount} API ${keyCount === 1 ? 'key' : 'keys'}` : '🦙 Ollama only';
-  showToast(`Saved — ${keyMsg}, ${QUOTA_MODE_LABELS[currentModalQuotaMode]} mode`, 'success');
-  closeModal();
 });
+
+if (debugClose) {
+  debugClose.addEventListener('click', () => {
+    if (debugPanel) debugPanel.style.display = 'none';
+    if (debugModeCheckbox) debugModeCheckbox.checked = false;
+    chrome.storage.local.set({ debugMode: false });
+  });
+}
 
 // ─── Send Message ───────────────────────────────────────────────────
 async function sendMessage() {
   const text = messageInput.value.trim();
   if (!text || isWaiting) return;
 
-  // Handle /clear command
-  if (text.toLowerCase() === '/clear') {
+  // Handle /clear command or natural-language clear requests
+  if (/^\/clear$/i.test(text) || /^(?:clear|reset)\s+(?:chat|conversation|history)$/i.test(text)) {
     messageInput.value = '';
     messageInput.style.height = 'auto';
     clearChat();
@@ -579,7 +612,9 @@ messageInput.addEventListener('input', () => {
 });
 
 // ─── Listen for Background Messages ─────────────────────────────────
-let lastToolCardId = null;
+// Maps tool call sequence index → card ID to handle multiple concurrent tool calls
+const toolCardMap = new Map();
+let toolCallSequence = 0;
 
 chrome.runtime.onMessage.addListener((message) => {
   switch (message.type) {
@@ -595,11 +630,7 @@ chrome.runtime.onMessage.addListener((message) => {
 
     case 'ASSISTANT_MESSAGE':
       hideTyping();
-      addAssistantMessage(message.text, { 
-        tier: message.tier, 
-        fromOllama: message.fromOllama,
-        fromCache: message.fromCache
-      });
+      addAssistantMessage(message.text, { fromCache: message.fromCache });
       isWaiting = false;
       sendBtn.disabled = false;
       break;
@@ -618,15 +649,22 @@ chrome.runtime.onMessage.addListener((message) => {
       sendBtn.disabled = false;
       break;
 
-    case 'TOOL_CALL':
-      lastToolCardId = addToolCallCard(message.toolName, message.args);
+    case 'TOOL_CALL': {
+      const seqId = message.seqId ?? toolCallSequence++;
+      const cardId = addToolCallCard(message.toolName, message.args);
+      toolCardMap.set(seqId, cardId);
       break;
+    }
 
-    case 'TOOL_RESULT':
-      if (lastToolCardId) {
-        updateToolCardResult(lastToolCardId, message.result);
+    case 'TOOL_RESULT': {
+      const seqId = message.seqId ?? (toolCallSequence - 1);
+      const cardId = toolCardMap.get(seqId);
+      if (cardId) {
+        updateToolCardResult(cardId, message.result);
+        toolCardMap.delete(seqId);
       }
       break;
+    }
 
     case 'BUDGET_UPDATE':
       updateBudgetDisplay(message.stats);
@@ -636,9 +674,15 @@ chrome.runtime.onMessage.addListener((message) => {
       // Briefly show which provider/key answered in the header
       if (headerSubtitle && message.label) {
         const prev = headerSubtitle.textContent;
-        headerSubtitle.textContent = `⚡ ${message.label}`;
+        const icon = message.provider === 'smart' ? '🧠' : message.provider === 'direct' ? '⚡' : '☁️';
+        headerSubtitle.textContent = `${icon} ${message.label}`;
         setTimeout(() => { headerSubtitle.textContent = prev; }, 3000);
       }
+      break;
+
+    case 'DEBUG_INFO':
+      if (debugSentPrompt) debugSentPrompt.textContent = message.sentPrompt || '';
+      if (debugReceivedResponse) debugReceivedResponse.textContent = message.rawResponse || '';
       break;
 
     case 'KEY_ROTATION':
@@ -648,59 +692,58 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-// ─── Ollama Status UI ──────────────────────────────────────────
-const ollamaIndicator = document.getElementById('ollamaIndicator');
-const ollamaStatusIcon = document.getElementById('ollamaStatusIcon');
-const ollamaStatusText = document.getElementById('ollamaStatusText');
 
-async function checkOllamaStatusUI() {
+
+// ─── Render Conversation History ─────────────────────────────────────
+async function loadAndRenderHistory() {
   try {
-    const status = await chrome.runtime.sendMessage({ type: 'GET_OLLAMA_STATUS' });
-    if (status && status.available) {
-      if (ollamaIndicator) ollamaIndicator.style.display = '';
-      if (ollamaStatusIcon) ollamaStatusIcon.textContent = '✅';
-      if (ollamaStatusText) {
-        const models = status.models?.slice(0, 3).join(', ') || 'connected';
-        ollamaStatusText.textContent = `Running (${models})`;
+    const history = await chrome.runtime.sendMessage({ type: 'GET_CONVERSATION_HISTORY' });
+    if (history && Array.isArray(history) && history.length > 0) {
+      if (emptyState) emptyState.style.display = 'none';
+
+      // Clear any existing messages in chatArea except typingIndicator
+      const existing = chatArea.querySelectorAll('.message, .tool-card');
+      existing.forEach(e => e.remove());
+
+      // Render messages
+      for (const msg of history) {
+        if (msg.role === 'user') {
+          let cleanText = msg.parts?.[0]?.text || '';
+          if (cleanText.includes('\n\n')) {
+            const parts = cleanText.split('\n\n');
+            if (parts[0].startsWith('[Current page:')) {
+              cleanText = parts.slice(1).join('\n\n'); // get everything after the context header
+            }
+          }
+          addUserMessage(cleanText);
+        } else if (msg.role === 'model') {
+          const cleanText = msg.parts?.[0]?.text || '';
+          addAssistantMessage(cleanText);
+        }
       }
-    } else {
-      if (ollamaIndicator) ollamaIndicator.style.display = 'none';
-      if (ollamaStatusIcon) ollamaStatusIcon.textContent = '❌';
-      if (ollamaStatusText) ollamaStatusText.textContent = 'Not detected — install from ollama.com';
+      scrollToBottom();
     }
-  } catch {
-    if (ollamaIndicator) ollamaIndicator.style.display = 'none';
-    if (ollamaStatusIcon) ollamaStatusIcon.textContent = '❌';
-    if (ollamaStatusText) ollamaStatusText.textContent = 'Not detected';
+  } catch (err) {
+    console.warn('[Sidebar] Failed to load conversation history:', err.message);
   }
 }
 
-// ─── Initialize ─────────────────────────────────────────────────
+// ─── Initialize ──────────────────────────────────────────────────
 async function init() {
-  const data = await chrome.storage.local.get(['aiProvider', 'apiKeys', 'geminiApiKey', 'quotaMode']);
-  const provider = data.aiProvider || 'gemini';
-  const mode = data.quotaMode || 'lite';
-  updateHeaderSubtitle(provider);
-  updateBudgetModeLabel(mode);
+  try {
+    const data = await chrome.storage.local.get(['aiProvider', 'apiKeys', 'geminiApiKey', 'quotaMode', 'debugMode']);
+    const provider = data.aiProvider || 'gemini';
+    const mode = data.quotaMode || 'full';
+    updateHeaderSubtitle(provider);
+    updateBudgetModeLabel(mode);
+    if (headerModeSelect) {
+      headerModeSelect.value = mode === 'chat' ? 'chat' : 'full';
+    }
+    if (debugPanel) debugPanel.style.display = data.debugMode ? 'block' : 'none';
 
-  // Check if any keys are configured (new or legacy format)
-  const hasKeys = (data.apiKeys && data.apiKeys.length > 0) || data.geminiApiKey;
-  if (!hasKeys) {
-    // Only auto-open settings if Ollama isn't running either
-    try {
-      const ollamaStatus = await chrome.runtime.sendMessage({ type: 'GET_OLLAMA_STATUS' });
-      if (!ollamaStatus?.available) {
-        setTimeout(() => {
-          settingsModal.classList.add('visible');
-          updateProviderUI(provider);
-          updateQuotaModeUI(mode);
-          renderKeyList([]);
-          checkOllamaStatusUI();
-        }, 500);
-      } else {
-        updateHeaderSubtitle('ollama');
-      }
-    } catch {
+    // Auto-open settings modal if no API keys are configured
+    const hasKeys = (data.apiKeys && data.apiKeys.length > 0) || data.geminiApiKey;
+    if (!hasKeys) {
       setTimeout(() => {
         settingsModal.classList.add('visible');
         updateProviderUI(provider);
@@ -708,12 +751,13 @@ async function init() {
         renderKeyList([]);
       }, 500);
     }
+
+    await loadAndRenderHistory();
+    messageInput.focus();
+  } catch (err) {
+    console.error('[Sidebar] Initialization error:', err);
+    showToast(`Error initializing sidebar: ${err.message}`, 'error');
   }
-
-  // Check Ollama status on sidebar open
-  checkOllamaStatusUI();
-
-  messageInput.focus();
 }
 
 init();

@@ -12,8 +12,14 @@
     <header class="header">
       <div class="header-left">
         <div class="header-logo">✦</div>
-        <div>
-          <div class="header-title">AI Assistant</div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <div class="header-title">AI Assistant</div>
+            <select class="header-mode-select" id="headerModeSelect">
+              <option value="full">🚀 Full</option>
+              <option value="chat">💬 Chat</option>
+            </select>
+          </div>
           <div class="header-subtitle" id="headerSubtitle">Powered by Gemini</div>
         </div>
       </div>
@@ -39,17 +45,24 @@
       </div>
     </div>
 
-    <!-- Budget Bar (Opt 6/7) -->
-    <div class="budget-bar" id="budgetBar">
-      <div class="budget-item">
-        <span class="budget-dot green" id="budgetDot"></span>
-        <span id="budgetText">15 req/min left</span>
+
+
+    <!-- Debug Panel -->
+    <div class="debug-panel" id="debugPanel" style="display:none; padding:10px; background:var(--bg-card); border-top:1px solid var(--border-color); border-bottom:1px solid var(--border-color); max-height:200px; overflow-y:auto;">
+      <div class="debug-header" id="debugHeader" style="display:flex; justify-content:space-between; align-items:center; font-weight:600; font-size:11px; color:var(--text-secondary); margin-bottom:8px;">
+        <span>🛠️ AI Prompt Debugger</span>
+        <button id="debugClose" style="background:none; border:none; color:var(--text-secondary); cursor:pointer; font-size:16px; padding:0 4px; line-height:1;">×</button>
       </div>
-      <div class="budget-item" id="ollamaIndicator" style="display:none">
-        <span class="budget-dot green" id="ollamaDot"></span>
-        <span id="ollamaLabel">🦙 Local</span>
+      <div class="debug-content" id="debugContent">
+        <div class="debug-section">
+          <div style="font-weight:600; color:var(--text-secondary); font-size:10px;">Sent Prompt:</div>
+          <pre id="debugSentPrompt" style="margin-top:4px; margin-bottom:0; max-height:70px; overflow-y:auto; font-family:monospace; font-size:10px; background:rgba(0,0,0,0.15); padding:6px; border-radius:4px; white-space:pre-wrap; word-break:break-all; color:var(--text-primary);"></pre>
+        </div>
+        <div class="debug-section" style="margin-top:8px;">
+          <div style="font-weight:600; color:var(--text-secondary); font-size:10px;">Received Raw Response:</div>
+          <pre id="debugReceivedResponse" style="margin-top:4px; margin-bottom:0; max-height:70px; overflow-y:auto; font-family:monospace; font-size:10px; background:rgba(0,0,0,0.15); padding:6px; border-radius:4px; white-space:pre-wrap; word-break:break-all; color:var(--text-primary);"></pre>
+        </div>
       </div>
-      <div class="budget-mode" id="budgetMode" title="Click to change quota mode">⚡ Lite</div>
     </div>
 
     <!-- Input Area -->
@@ -92,31 +105,22 @@
               <div class="provider-card-desc">Google AI</div>
             </div>
           </label>
-          <label class="provider-card" id="cardGroq" data-provider="groq">
-            <input type="radio" name="provider" value="groq" hidden>
-            <div class="provider-card-icon">⚡</div>
+          <label class="provider-card" id="cardOpenAI" data-provider="openai">
+            <input type="radio" name="provider" value="openai" hidden>
+            <div class="provider-card-icon">🟢</div>
             <div class="provider-card-info">
-              <div class="provider-card-name">Groq</div>
-              <div class="provider-card-model">llama-3.3-70b</div>
-              <div class="provider-card-desc">Fast inference</div>
+              <div class="provider-card-name">OpenAI</div>
+              <div class="provider-card-model">gpt-4o-mini</div>
+              <div class="provider-card-desc">ChatGPT models</div>
             </div>
           </label>
-          <label class="provider-card" id="cardCerebras" data-provider="cerebras">
-            <input type="radio" name="provider" value="cerebras" hidden>
-            <div class="provider-card-icon">🧠</div>
+          <label class="provider-card" id="cardOpenRouter" data-provider="openrouter">
+            <input type="radio" name="provider" value="openrouter" hidden>
+            <div class="provider-card-icon">🌐</div>
             <div class="provider-card-info">
-              <div class="provider-card-name">Cerebras</div>
-              <div class="provider-card-model">llama-3.3-70b</div>
-              <div class="provider-card-desc">Ultra-fast</div>
-            </div>
-          </label>
-          <label class="provider-card" id="cardTogether" data-provider="together">
-            <input type="radio" name="provider" value="together" hidden>
-            <div class="provider-card-icon">🤝</div>
-            <div class="provider-card-info">
-              <div class="provider-card-name">Together</div>
-              <div class="provider-card-model">llama-3.3-70b-turbo</div>
-              <div class="provider-card-desc">$1 free credit</div>
+              <div class="provider-card-name">OpenRouter</div>
+              <div class="provider-card-model">gemini-2.5-flash</div>
+              <div class="provider-card-desc">Many free models</div>
             </div>
           </label>
         </div>
@@ -131,9 +135,8 @@
         <div class="add-key-form" id="addKeyForm" style="display:none">
           <select class="form-input form-select" id="newKeyProvider">
             <option value="gemini">✦ Gemini (Google AI Studio)</option>
-            <option value="groq">⚡ Groq</option>
-            <option value="cerebras">🧠 Cerebras</option>
-            <option value="together">🤝 Together AI</option>
+            <option value="openai">🟢 OpenAI (ChatGPT)</option>
+            <option value="openrouter">🌐 OpenRouter</option>
           </select>
           <input type="text" class="form-input" id="newKeyLabel" placeholder="Label (e.g. Account 2)" maxlength="30">
           <input type="password" class="form-input" id="newKeyValue" placeholder="Paste API key here...">
@@ -147,9 +150,7 @@
         <div class="form-hint">
           Add keys from multiple accounts for automatic rotation.
           Get free keys: <a href="https://aistudio.google.com/apikey" target="_blank">Gemini</a> ·
-          <a href="https://console.groq.com/keys" target="_blank">Groq</a> ·
-          <a href="https://cloud.cerebras.ai/" target="_blank">Cerebras</a> ·
-          <a href="https://api.together.ai/" target="_blank">Together</a>
+          <a href="https://openrouter.ai/keys" target="_blank">OpenRouter</a>
         </div>
       </div>
 
@@ -157,16 +158,12 @@
       <div class="form-group">
         <label class="form-label">Quota Mode</label>
         <div class="quota-mode-cards" id="quotaModeCards">
-          <label class="quota-card" id="cardFull" data-mode="full">
-            <input type="radio" name="quotaMode" value="full" hidden>
+          <label class="quota-card active" id="cardFull" data-mode="full">
+            <input type="radio" name="quotaMode" value="full" hidden checked>
             <div class="quota-card-name">🚀 Full</div>
             <div class="quota-card-desc">All tools, 8 steps</div>
           </label>
-          <label class="quota-card active" id="cardLite" data-mode="lite">
-            <input type="radio" name="quotaMode" value="lite" hidden checked>
-            <div class="quota-card-name">⚡ Lite</div>
-            <div class="quota-card-desc">Smart tools, 5 steps</div>
-          </label>
+
           <label class="quota-card" id="cardChat" data-mode="chat">
             <input type="radio" name="quotaMode" value="chat" hidden>
             <div class="quota-card-name">💬 Chat</div>
@@ -175,18 +172,24 @@
         </div>
       </div>
 
-      <!-- Local AI (Ollama) -->
-      <div class="form-group">
-        <label class="form-label">Local AI (Ollama)</label>
-        <div class="ollama-status" id="ollamaStatus">
-          <div class="ollama-info">
-            <span class="ollama-icon" id="ollamaStatusIcon">❌</span>
-            <span id="ollamaStatusText">Not detected</span>
-          </div>
-        </div>
+      <!-- OpenRouter Model Configuration -->
+      <div class="form-group" id="openrouterModelGroup" style="display:none">
+        <label class="form-label">OpenRouter Model ID</label>
+        <input type="text" class="form-input" id="openrouterModelInput" placeholder="google/gemini-2.5-flash">
         <div class="form-hint">
-          Install <a href="https://ollama.com" target="_blank">Ollama</a> for free unlimited local chat.
-          Simple questions go to Ollama, tool calls go to API.
+          Choose an OpenRouter model ID (e.g. <code>google/gemini-2.5-flash</code>, <code>meta-llama/llama-3.1-8b-instruct</code>, or <code>google/gemma-2-9b-it:free</code>).
+        </div>
+      </div>
+
+
+      <!-- Debug Mode Configuration -->
+      <div class="form-group">
+        <label class="form-label" style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:500;">
+          <input type="checkbox" id="debugModeCheckbox" style="width:16px; height:16px; margin:0;">
+          <span>Show AI Prompt Debugger</span>
+        </label>
+        <div class="form-hint">
+          Displays the raw prompt sent to the LLM and the raw JSON response received from the API.
         </div>
       </div>
 

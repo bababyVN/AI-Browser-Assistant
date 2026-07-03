@@ -76,12 +76,43 @@ window.__aiAssistant.getPageSnapshot = function() {
 };
 
 // ─── PLAY_VIDEO ────────────────────────────────────────────────────
-
 window.__aiAssistant.playVideo = function(index) {
-  // _getElement() is exposed by interaction.js to give direct DOM access
+  // First, look for actual video links (YouTube search results or suggestions)
+  const videoLinks = [];
+  const seenUrls = new Set();
+  
+  document.querySelectorAll('a').forEach(a => {
+    const href = a.getAttribute('href') || '';
+    if (href.includes('/watch?v=')) {
+      try {
+        const urlObj = new URL(href, window.location.origin);
+        const v = urlObj.searchParams.get('v');
+        if (v && !seenUrls.has(v)) {
+          seenUrls.add(v);
+          videoLinks.push(a);
+        }
+      } catch {}
+    }
+  });
+
+  if (videoLinks.length > index) {
+    const targetLink = videoLinks[index];
+    try {
+      targetLink.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch {}
+    window.location.href = targetLink.href; // Navigate directly!
+    return { 
+      success: true, 
+      action: 'navigate_tab',
+      url: targetLink.href,
+      description: `Navigated to video: "${targetLink.innerText.trim() || 'video'}"` 
+    };
+  }
+
+  // Fallback to original elementMap index
   const el = window.__aiAssistant._getElement(index);
   if (!el) {
-    return { success: false, error: `Element at index ${index} not found. Try running get_page_elements again.` };
+    return { success: false, error: `Element at index ${index} not found.` };
   }
 
   try {

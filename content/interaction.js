@@ -1,40 +1,45 @@
 /**
- * content/interaction.js — Element Scanning & Interaction
- * Handles scanning interactive elements, clicking, typing,
- * and selecting options on the page.
- * Loaded SECOND in the content_scripts order.
+ * content/interaction.js — Element Scanning & Interaction (Generic Version)
+ * Handles scanning interactive elements, clicking, typing, and generalized heuristics.
  */
 'use strict';
 
 window.__aiAssistant = window.__aiAssistant || {};
 
-// ─── Element Index Map (refreshed on each scan) ────────────────────
+// Sử dụng Map để ánh xạ chỉ số với Node DOM thực tế
 let elementMap = new Map();
 
 /**
- * Internal accessor — lets snapshot.js read the elementMap without re-scanning.
- * Only valid after getInteractiveElements() has been called.
+ * Thu hồi và giải phóng bộ nhớ để tránh Detached DOM Trees Memory Leak trên SPA
  */
+function resetElementMap() {
+  if (elementMap) {
+    elementMap.clear();
+  }
+  elementMap = new Map();
+}
+
 window.__aiAssistant._getElement = function(index) {
   return elementMap.get(index) || null;
 };
 
-// ─── Utility: Check if element is visible & in viewport ────────────
 function isElementVisible(el) {
   if (!el || !el.getBoundingClientRect) return false;
   const rect = el.getBoundingClientRect();
-  if (rect.width === 0 && rect.height === 0) return false;
+  if (rect.width < 3 || rect.height < 3) return false;
+  
   const style = window.getComputedStyle(el);
-  if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
-  // Viewport-aware filtering — only elements within ±100px of viewport
+  if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0' || style.pointerEvents === 'none') return false;
+  
   const viewportHeight = window.innerHeight;
   const viewportWidth = window.innerWidth;
-  if (rect.bottom < -100 || rect.top > viewportHeight + 100) return false;
+  if (rect.bottom < -200 || rect.top > viewportHeight + 300) return false;
   if (rect.right < 0 || rect.left > viewportWidth) return false;
+  
   return true;
 }
+window.__aiAssistant.isElementVisible = isElementVisible;
 
-// ─── Utility: Get meaningful text from element ─────────────────────
 function getElementText(el) {
   const ariaLabel = el.getAttribute('aria-label') || '';
   const title = el.getAttribute('title') || '';
@@ -42,14 +47,11 @@ function getElementText(el) {
   const placeholder = el.getAttribute('placeholder') || '';
   const innerText = (el.innerText || '').trim();
 
-  // Priority: aria-label > title > alt > innerText > placeholder
   let text = ariaLabel || title || alt || innerText || placeholder || '';
-  // Truncate to 80 chars
   if (text.length > 80) text = text.substring(0, 77) + '...';
   return text;
 }
 
-// ─── Utility: Detect element type category ────────────────────────
 function getElementType(el) {
   const tag = el.tagName.toLowerCase();
   if (tag === 'a') return 'link';
@@ -70,11 +72,9 @@ function getElementType(el) {
     return 'iframe';
   }
   if (tag === 'img') {
-    // Check if wrapped in a link
     if (el.closest('a')) return 'image-link';
     return 'image';
   }
-  // Elements with onclick or role=button
   if (el.getAttribute('role') === 'button' || el.hasAttribute('onclick')) return 'button';
   if (el.getAttribute('role') === 'link') return 'link';
   if (el.getAttribute('role') === 'tab') return 'tab';
@@ -82,34 +82,91 @@ function getElementType(el) {
   return 'interactive';
 }
 
-// ─── GET_INTERACTIVE_ELEMENTS ──────────────────────────────────────
+/**
+ * Hàm Heuristic quét phần tử dựa trên trọng số từ khóa ngữ nghĩa (Chạy tốt trên mọi Website)
+ */
+window.__aiAssistant.findGenericElement = function(selectors, regexes) {
+  const candidates = document.querySelectorAll(selectors.join(', '));
+  let bestCandidate = null;
+  let maxScore = 0;
+
+  for (const el of candidates) {
+    if (!isElementVisible(el)) continue;
+
+    const textSources = [
+      el.getAttribute('aria-label'),
+      el.getAttribute('title'),
+      el.innerText,
+      el.getAttribute('placeholder'),
+      el.className
+    ].filter(Boolean).map(t => t.toLowerCase());
+
+    let score = 0;
+    for (const text of textSources) {
+      regexes.forEach((regex, index) => {
+        if (regex.test(text)) {
+          score += (index === 0) ? 10 : 5; // Ưu tiên các regex chính xác cao đứng đầu mảng
+        }
+      });
+    }
+
+    if (score > maxScore) {
+      maxScore = score;
+      bestCandidate = el;
+    }
+  }
+
+  return bestCandidate;
+};
 
 window.__aiAssistant.getInteractiveElements = function() {
-  // Clear previous map
-  elementMap = new Map();
+  resetElementMap(); // Giải phóng tham chiếu cũ trước khi quét mới
 
   const selectors = [
-    'a[href]',
-    'button',
-    'input',
-    'textarea',
-    'select',
-    'video',
-    'iframe[src*="youtube"], iframe[src*="youtu.be"], iframe[src*="vimeo"]',
-    '[role="button"]',
-    '[role="link"]',
-    '[role="tab"]',
-    '[role="menuitem"]',
-    '[onclick]'
+    'a[href]', 'button', 'input', 'textarea', 'select', 'video',
+    'iframe[src*="youtube"]', 'iframe[src*="youtu.be"]', 'iframe[src*="vimeo"]',
+    '[role="button"]', '[role="link"]', '[role="tab"]', '[role="menuitem"]', '[onclick]'
   ];
 
   const allElements = document.querySelectorAll(selectors.join(', '));
+  const mainElements = [];
+  const navElements = [];
+  const navJunkPattern = /\b(nav|menu|sidebar|footer|header|cookie|banner|popup|modal|ads?|advert|social|share|comments?|related|widget|masthead|searchbox)\b/i;
+
+  for (const el of allElements) {
+    if (!isElementVisible(el)) continue;
+
+    // Check if the element or any of its parents is a nav/header/footer element
+    let isNav = false;
+    let parent = el;
+    while (parent && parent !== document.body) {
+      const tag = parent.tagName.toLowerCase();
+      if (['nav', 'header', 'footer', 'aside'].includes(tag)) {
+        isNav = true;
+        break;
+      }
+      const classAndId = (parent.className || '') + ' ' + (parent.id || '');
+      if (navJunkPattern.test(classAndId)) {
+        isNav = true;
+        break;
+      }
+      parent = parent.parentElement;
+    }
+
+    if (isNav) {
+      navElements.push(el);
+    } else {
+      mainElements.push(el);
+    }
+  }
+
+  // Combine lists with main elements first
+  const prioritized = [...mainElements, ...navElements];
   const results = [];
   let index = 0;
 
-  for (const el of allElements) {
-    if (index >= 50) break;
-    if (!isElementVisible(el)) continue;
+  for (const el of prioritized) {
+    if (results.length >= 150) break;
 
     const rect = el.getBoundingClientRect();
     const type = getElementType(el);
@@ -121,25 +178,12 @@ window.__aiAssistant.getInteractiveElements = function() {
       tag: tag,
       type: type,
       text: text,
-      href: el.getAttribute('href') || undefined,
-      ariaLabel: el.getAttribute('aria-label') || undefined,
-      placeholder: el.getAttribute('placeholder') || undefined,
-      value: (tag === 'input' || tag === 'textarea') ? (el.value || '').substring(0, 50) : undefined,
-      name: el.getAttribute('name') || undefined,
-      inputType: (tag === 'input') ? (el.getAttribute('type') || 'text') : undefined,
-      selector: el.className ? el.className.split(' ').slice(0, 3).join('.') : undefined,
-      contentEditable: el.getAttribute('contenteditable') === 'true' ? true : undefined,
-      isVisible: true,
-      rect: {
-        x: Math.round(rect.x),
-        y: Math.round(rect.y),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height)
-      }
+      rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }
     };
 
-    // Clean undefined fields
-    Object.keys(entry).forEach(k => { if (entry[k] === undefined) delete entry[k]; });
+    if (el.getAttribute('href')) entry.href = el.getAttribute('href');
+    if (el.getAttribute('placeholder')) entry.placeholder = el.getAttribute('placeholder');
+    if (tag === 'input' || tag === 'textarea') entry.value = (el.value || '').substring(0, 50);
 
     elementMap.set(index, el);
     results.push(entry);
@@ -149,146 +193,289 @@ window.__aiAssistant.getInteractiveElements = function() {
   return results;
 };
 
-// ─── CLICK_ELEMENT ─────────────────────────────────────────────────
-
 window.__aiAssistant.clickElement = function(index) {
   const el = elementMap.get(index);
-  if (!el) {
-    return { success: false, error: `Element at index ${index} not found. Try running get_page_elements again to refresh the list.` };
-  }
-
-  if (!document.body.contains(el)) {
-    return { success: false, error: `Element at index ${index} is no longer in the DOM. The page may have changed. Try running get_page_elements again.` };
+  if (!el || !document.body.contains(el)) {
+    return { success: false, error: `Phần tử tại index ${index} không còn tồn tại trong DOM.` };
   }
 
   try {
-    // Scroll into view
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-    const tag = el.tagName.toLowerCase();
-    const type = getElementType(el);
     const text = getElementText(el);
 
-    // For links with target="_blank", return the URL for background to open
-    if (tag === 'a' && el.getAttribute('target') === '_blank' && el.href) {
-      return {
-        success: true,
-        action: 'open_in_new_tab',
-        url: el.href,
-        description: `Link "${text}" opens in new tab`
-      };
-    }
-
-    // For image-links, click the parent <a>
-    if (type === 'image-link') {
-      const parentLink = el.closest('a');
-      if (parentLink) {
-        if (parentLink.getAttribute('target') === '_blank' && parentLink.href) {
-          return {
-            success: true,
-            action: 'open_in_new_tab',
-            url: parentLink.href,
-            description: `Image link "${text}" opens in new tab`
-          };
-        }
-        parentLink.click();
-        return { success: true, action: 'clicked', description: `Clicked image link "${text}"` };
+    const anchor = el.tagName.toLowerCase() === 'a' ? el : el.closest('a');
+    if (anchor && anchor.href) {
+      if (anchor.getAttribute('target') === '_blank') {
+        window.open(anchor.href, '_blank');
+        return { success: true, action: 'open_in_new_tab', url: anchor.href, description: `Đã mở liên kết "${text}" ở tab mới` };
+      } else {
+        window.location.href = anchor.href;
+        return { success: true, action: 'clicked', url: anchor.href, description: `Đã chuyển hướng đến "${text}"` };
       }
     }
 
-    // Standard click
     el.click();
-    return { success: true, action: 'clicked', description: `Clicked ${type} "${text}"` };
+    return { success: true, action: 'clicked', description: `Đã click vào phần tử "${text}"` };
   } catch (err) {
-    return { success: false, error: `Failed to click element: ${err.message}` };
+    return { success: false, error: err.message };
   }
 };
 
-// ─── TYPE_TEXT ──────────────────────────────────────────────────────
-
-window.__aiAssistant.typeText = function(index, text, clear) {
+window.__aiAssistant.typeText = function(index, text, clear, submit) {
   const el = elementMap.get(index);
-  if (!el) {
-    return { success: false, error: `Element at index ${index} not found. Try running get_page_elements again.` };
-  }
-
-  const tag = el.tagName.toLowerCase();
-  const isEditable = el.getAttribute('contenteditable') === 'true';
-
-  if (tag !== 'input' && tag !== 'textarea' && !isEditable) {
-    return { success: false, error: `Element at index ${index} (${tag}) is not a text input.` };
-  }
+  if (!el) return { success: false, error: `Không tìm thấy phần tử nhập liệu tại index ${index}` };
 
   try {
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     el.focus();
 
+    const isEditable = el.getAttribute('contenteditable') === 'true';
     if (isEditable) {
       if (clear) el.textContent = '';
       el.textContent += text;
     } else {
       if (clear) el.value = '';
-      // Use native input setter to trigger frameworks (React, Vue, etc.)
-      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype, 'value'
-      )?.set || Object.getOwnPropertyDescriptor(
-        window.HTMLTextAreaElement.prototype, 'value'
-      )?.set;
-
-      if (nativeInputValueSetter) {
-        nativeInputValueSetter.call(el, clear ? text : el.value + text);
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set ||
+                     Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+      if (setter) {
+        setter.call(el, clear ? text : el.value + text);
       } else {
         el.value = clear ? text : el.value + text;
       }
     }
 
-    // Dispatch events to trigger framework reactivity
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-    el.dispatchEvent(new Event('keyup', { bubbles: true }));
 
-    return {
-      success: true,
-      description: `Typed "${text.substring(0, 40)}${text.length > 40 ? '...' : ''}" into ${tag}`
-    };
-  } catch (err) {
-    return { success: false, error: `Failed to type text: ${err.message}` };
-  }
-};
-
-// ─── SELECT_OPTION ─────────────────────────────────────────────────
-
-window.__aiAssistant.selectOption = function(index, value) {
-  const el = elementMap.get(index);
-  if (!el) {
-    return { success: false, error: `Element at index ${index} not found. Try running get_page_elements again.` };
-  }
-
-  if (el.tagName.toLowerCase() !== 'select') {
-    return { success: false, error: `Element at index ${index} is not a <select> dropdown.` };
-  }
-
-  try {
-    // Find option by value or text
-    let found = false;
-    for (const option of el.options) {
-      if (option.value === value || option.text.toLowerCase().includes(value.toLowerCase())) {
-        el.value = option.value;
-        found = true;
-        break;
+    if (submit) {
+      el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13, xi: 13, which: 13 }));
+      el.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13, xi: 13, which: 13 }));
+      el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13, xi: 13, which: 13 }));
+      if (el.form) {
+        try { el.form.submit(); } catch {}
       }
     }
 
-    if (!found) {
-      const available = Array.from(el.options).map(o => o.text).join(', ');
-      return { success: false, error: `Option "${value}" not found. Available: ${available}` };
+    return { success: true, description: `Đã nhập dữ liệu thành công.${submit ? ' Đã gửi lệnh Enter.' : ''}` };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+};
+
+/**
+ * Phân loại ngữ nghĩa thông minh cho phần tử DOM.
+ * Trả về nhãn ngữ nghĩa chi tiết hơn getElementType().
+ */
+function classifyElement(el) {
+  const tag = el.tagName.toLowerCase();
+  const href = (el.getAttribute('href') || '').toLowerCase();
+  const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+  const text = (el.innerText || '').trim().toLowerCase();
+  const allText = `${ariaLabel} ${text} ${el.className || ''}`;
+
+  // Video detection (YouTube, generic)
+  if (tag === 'a' && (href.includes('/watch?v=') || href.includes('/shorts/') || href.includes('/video/'))) {
+    return 'VIDEO';
+  }
+  if (tag === 'video' || (tag === 'iframe' && /youtube|youtu\.be|vimeo/.test(el.getAttribute('src') || ''))) {
+    return 'VIDEO';
+  }
+
+  // Semantic button subtypes
+  if (tag === 'button' || el.getAttribute('role') === 'button') {
+    if (/\b(like|thích|upvote|👍)\b/i.test(allText)) return 'BTN:like';
+    if (/\b(dislike|không thích|downvote|👎)\b/i.test(allText)) return 'BTN:dislike';
+    if (/\b(share|chia sẻ)\b/i.test(allText)) return 'BTN:share';
+    if (/\b(subscribe|đăng ký|follow|theo dõi)\b/i.test(allText)) return 'BTN:subscribe';
+    if (/\b(save|lưu|bookmark)\b/i.test(allText)) return 'BTN:save';
+    if (/\b(reply|trả lời|phản hồi)\b/i.test(allText)) return 'BTN:reply';
+    if (/\b(send|gửi|submit|đăng|post)\b/i.test(allText)) return 'BTN:submit';
+    if (/\b(menu|more|thêm|⋮|\.\.\.)\b/i.test(allText)) return 'BTN:menu';
+    return 'BTN';
+  }
+
+  // Input subtypes
+  if (tag === 'input' || tag === 'textarea') {
+    const type = (el.getAttribute('type') || 'text').toLowerCase();
+    if (type === 'search' || /search|tìm/i.test(allText)) return 'SEARCH';
+    if (type === 'checkbox') return 'CHECKBOX';
+    if (type === 'radio') return 'RADIO';
+    if (/comment|bình luận/i.test(allText)) return 'INPUT:comment';
+    return 'INPUT';
+  }
+  if (tag === 'select') return 'SELECT';
+
+  // Link subtypes
+  if (tag === 'a') {
+    if (tag === 'a' && el.querySelector('img, picture, svg')) {
+      // Image-link, could be a thumbnail
+      const img = el.querySelector('img');
+      if (img && img.width > 100 && img.height > 60) return 'THUMBNAIL';
+    }
+    return 'LINK';
+  }
+
+  if (el.getAttribute('role') === 'tab') return 'TAB';
+  if (el.getAttribute('role') === 'menuitem') return 'MENUITEM';
+  return 'INTERACTIVE';
+}
+
+/**
+ * Xây dựng nhãn hiển thị nén cho 1 phần tử.
+ */
+function buildLabel(el, smartType) {
+  const tag = el.tagName.toLowerCase();
+  let text = '';
+
+  // Lấy text hiển thị
+  const ariaLabel = el.getAttribute('aria-label') || '';
+  const title = el.getAttribute('title') || '';
+  const alt = el.querySelector('img')?.getAttribute('alt') || '';
+  const innerText = (el.innerText || '').trim();
+  const placeholder = el.getAttribute('placeholder') || '';
+
+  text = ariaLabel || title || alt || innerText || placeholder || '';
+  // Cắt ngắn
+  if (text.length > 80) text = text.substring(0, 77) + '...';
+  // Escape newlines
+  text = text.replace(/[\n\r]+/g, ' ').trim();
+
+  // Build label based on type
+  let label = `[${smartType}]`;
+
+  if (smartType === 'VIDEO') {
+    // Enrich with channel/views from parent container
+    const meta = extractVideoMeta(el);
+    label += ` "${text}"`;
+    if (meta.channel) label += ` · ${meta.channel}`;
+    if (meta.views) label += ` · ${meta.views}`;
+  } else if (smartType === 'SEARCH' || smartType === 'INPUT' || smartType === 'INPUT:comment') {
+    const val = el.value || '';
+    if (val) {
+      label += ` "${val.substring(0, 40)}"`;
+    } else if (placeholder) {
+      label += ` placeholder="${placeholder.substring(0, 40)}"`;
+    }
+  } else if (smartType === 'THUMBNAIL') {
+    const img = el.querySelector('img');
+    const imgAlt = img?.getAttribute('alt') || text;
+    label += ` "${imgAlt}"`;
+  } else if (text) {
+    label += ` "${text}"`;
+  }
+
+  return label;
+}
+
+/**
+ * Trích xuất metadata video từ container cha (channel, views).
+ */
+function extractVideoMeta(el) {
+  const meta = { channel: '', views: '' };
+
+  // Tìm container cha gần nhất chứa video info
+  // YouTube: ytd-video-renderer, ytd-rich-item-renderer
+  // Generic: article, li, .card, .video-item
+  const container = el.closest('ytd-video-renderer, ytd-rich-item-renderer, ytd-compact-video-renderer, article, li, [class*="video"], [class*="card"]');
+  if (!container) return meta;
+
+  const containerText = container.innerText || '';
+  const lines = containerText.split('\n').map(l => l.trim()).filter(l => l.length > 0 && l.length < 100);
+
+  // Tìm view count pattern
+  for (const line of lines) {
+    if (/\d+[\s,.]*(views|lượt xem|lượt phát|watching|người xem)/i.test(line)) {
+      meta.views = line.substring(0, 30);
+      break;
+    }
+  }
+
+  // Tìm channel name (thường là dòng text ngắn không chứa view count và không phải title)
+  const titleText = (el.getAttribute('title') || el.getAttribute('aria-label') || el.innerText || '').trim();
+  for (const line of lines) {
+    if (line === titleText) continue;
+    if (/views|lượt xem|ago|trước|watching/i.test(line)) continue;
+    if (line.length > 3 && line.length < 50) {
+      meta.channel = line;
+      break;
+    }
+  }
+
+  return meta;
+}
+
+/**
+ * Xây dựng DOM Map siêu nén — bản đồ toàn bộ phần tử tương tác trên trang.
+ * Trả về chuỗi text nén phục vụ đính kèm vào prompt cho LLM.
+ *
+ * Output format:
+ * [PAGE: "title" — hostname/path]
+ * --- MAIN CONTENT ---
+ * #0 [VIDEO] "React Full Course" · Bro Code · 5.2M views
+ * #1 [BTN:like] "Like"
+ * #2 [INPUT] placeholder="Add comment..."
+ * --- NAV/HEADER ---
+ * #30 [SEARCH] "current search text"
+ * #31 [LINK] "Home"
+ */
+window.__aiAssistant.buildDomMap = function() {
+  resetElementMap();
+
+  const selectors = [
+    'a[href]', 'button', 'input', 'textarea', 'select', 'video',
+    'iframe[src*="youtube"]', 'iframe[src*="youtu.be"]', 'iframe[src*="vimeo"]',
+    '[role="button"]', '[role="link"]', '[role="tab"]', '[role="menuitem"]', '[onclick]'
+  ];
+
+  const allElements = document.querySelectorAll(selectors.join(', '));
+  const mainEntries = [];
+  const navEntries = [];
+  const navJunkPattern = /\b(nav|menu|sidebar|footer|header|cookie|banner|popup|modal|ads?|advert|social|share|comments?-section|related|widget|masthead|topbar|toolbar|chips)\b/i;
+
+  let index = 0;
+
+  for (const el of allElements) {
+    if (index >= 200) break;
+    if (!isElementVisible(el)) continue;
+
+    // Phân loại main vs nav
+    let isNav = false;
+    let parent = el;
+    while (parent && parent !== document.body) {
+      const tag = parent.tagName.toLowerCase();
+      if (['nav', 'header', 'footer', 'aside'].includes(tag)) { isNav = true; break; }
+      const classAndId = (parent.className || '') + ' ' + (parent.id || '');
+      if (navJunkPattern.test(classAndId)) { isNav = true; break; }
+      parent = parent.parentElement;
     }
 
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-    el.dispatchEvent(new Event('input', { bubbles: true }));
+    // Phân loại ngữ nghĩa thông minh
+    const smartType = classifyElement(el);
+    const label = buildLabel(el, smartType);
 
-    return { success: true, description: `Selected "${value}" from dropdown` };
-  } catch (err) {
-    return { success: false, error: `Failed to select option: ${err.message}` };
+    elementMap.set(index, el);
+    const entry = `#${index} ${label}`;
+
+    if (isNav) {
+      navEntries.push(entry);
+    } else {
+      mainEntries.push(entry);
+    }
+    index++;
   }
+
+  // Build final compact string
+  const pageHeader = `[PAGE: "${document.title}" — ${location.hostname}${location.pathname}]`;
+  let map = pageHeader + '\n';
+
+  if (mainEntries.length > 0) {
+    map += '--- MAIN CONTENT ---\n';
+    map += mainEntries.join('\n') + '\n';
+  }
+  if (navEntries.length > 0) {
+    map += '--- NAV/HEADER ---\n';
+    map += navEntries.join('\n') + '\n';
+  }
+
+  return { map, elementCount: index };
 };
