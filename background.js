@@ -8,14 +8,24 @@
  *   4. Final text returned to Sidebar
  */
 
-import { BudgetTracker } from './lib/budget.js';
 import { callWithRotation, loadApiConfigs } from './lib/router.js';
 import { TOOL_DECLARATIONS, initTools, getActiveTabAndInject } from './lib/tools.js';
 import { VectorHistoryStore } from './lib/history-store.js';
 import { tryDirectExecution } from './lib/direct-executor.js';
 
+// ─── Initialize Side Panel Behavior ──────────────────────────────────
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(console.error);
+
+chrome.action.onClicked.addListener(async (tab) => {
+  try {
+    await chrome.sidePanel.open({ tabId: tab.id });
+  } catch (err) {
+    console.error("Could not open side panel:", err);
+  }
+});
+
 const historyStore = new VectorHistoryStore();
-const budget = new BudgetTracker();
+
 const pageCache = new Map();
 const CACHE_TTL = 60_000;
 
@@ -34,7 +44,7 @@ function setCachedPage(tabId, url, data) {
 initTools({ getCachedPage, setCachedPage, historyStore });
 
 const QUOTA_CONFIGS = {
-  full: { historyMax: 10, toolMode: 'all' },
+  full: { historyMax: 20, toolMode: 'all' },
   chat: { historyMax: 6,  toolMode: 'none' }
 };
 
@@ -122,21 +132,14 @@ function trimHistory(history, maxMessages) {
   return [history[0], ...history.slice(-(maxMessages - 1))];
 }
 
-function needsBrowserElements(text) {
-  if (!text) return false;
-  const lower = text.toLowerCase();
-  return ['click','type','press','search','scroll','button','link','input','play','video',
-    'like','comment','nhấp','gõ','nhập','tìm','mở','cuộn','nút','bình luận','thích','chọn','ấn','bấm','điền'].some(w => lower.includes(w));
-}
-
 // ─── Core Pipeline ──────────────────────────────────────────────────
 
 async function runSingleShotCloudPipeline(userText, configs, quotaConfig) {
   sendToSidebar({ type: 'TYPING_START' });
 
-  // ─── Thu thập DOM Map có điều kiện (Tiết kiệm token) ───
+  // ─── Thu thập DOM Map siêu nén (LUÔN đính kèm — rất nhẹ ~200-400 token) ───
   let contextStr = '';
-  if (quotaConfig.toolMode !== 'none' && needsBrowserElements(userText)) {
+  if (quotaConfig.toolMode !== 'none') {
     try {
       const tab = await getActiveTabAndInject();
       if (tab?.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
@@ -162,8 +165,6 @@ async function runSingleShotCloudPipeline(userText, configs, quotaConfig) {
   let finalResponseData = null;
   try {
     finalResponseData = await callWithRotation(messages, activeTools, SYSTEM_PROMPT);
-    budget.recordRequest();
-    sendToSidebar({ type: 'BUDGET_UPDATE', stats: budget.getStats() });
   } catch (err) {
     sendToSidebar({ type: 'TYPING_STOP' });
     sendToSidebar({ type: 'ASSISTANT_ERROR', error: `API Error: ${err.message}` });
@@ -218,24 +219,45 @@ export async function handleChatMessage(userText) {
 
 // ─── System Prompt ──────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are an expert AI browser assistant.
+const SYSTEM_PROMPT = `You are an expert AI browser assistant that helps users control their web browser and analyze web pages.
 
-## DOM Map & Interaction
-- If attached, the DOM Map lists elements like: #0 [VIDEO] "Title" | #1 [BTN:like] | #2 [SEARCH].
-- If you need to interact (click/type) but DOM Map is missing, call get_page_elements first.
-- Call click_element(#index) or type_into_element(#index) directly using # numbers.
+## DOM Map
+Every message includes a DOM Map — a compact listing of ALL interactive elements on the current page.
+The DOM Map uses this format:
+- \"MAIN CONTENT\" section = primary page content (videos, articles, posts, forms)
+- \"NAV/HEADER\" section = navigation and utility elements
+- Element types: [VIDEO] [THUMBNAIL] [BTN] [BTN:like] [BTN:share] [BTN:subscribe] [LINK] [INPUT] [SEARCH] [INPUT:comment] [TAB] [SELECT] [CHECKBOX] [RADIO]
+- Each element has a # index number for interaction
 
-## Content Reading
-- Summarize/Read: read_page_content(section_index?) -> summary & sections.
-- Specific Info: search_in_page(query) -> snippets.
-- NEVER fabricate content.
+## How to Use the DOM Map
+- To click the 2nd video: find the second [VIDEO] in MAIN CONTENT → call click_element with its #index
+- To type in search: find [SEARCH] → call type_into_element with its #index
+- You do NOT need to call get_page_elements first — the DOM Map already provides all indexes
+- Only call get_page_elements if you need to rescan after the page changed (scrolling, navigation)
 
-## Tools
-- click_element(index), type_into_element(index, text), scroll_page(dir), open_url(url), get_open_tabs()
-- read_page_content(section_index), search_in_page(query), get_page_elements()
-- like_video(), comment_video(text)
+## Reading Page Content
+- To summarize a page: call read_page_content() — returns a short overview + list of sections
+- To read a specific section in detail: call read_page_content(section_index=N)
+- To find specific information: call search_in_page(query=\"...\") — returns matching snippets
+- NEVER fabricate or guess page content — always use tools to read it
+
+## Tools Available
+- **click_element**: Click an element by its DOM Map index number
+- **type_into_element**: Type text into an input by its DOM Map index
+- **scroll_page**: Scroll the page (up/down/top/bottom)
+- **open_url**: Navigate to a URL
+- **get_open_tabs**: List all open browser tabs
+- **read_page_content**: Read/summarize the page content (lazy-loaded, token-efficient)
+- **search_in_page**: Search for specific text on the current page
+- **get_page_elements**: Rescan page elements (only needed after page changes)
+- **like_video**: Click the Like button on social media / video platforms
+- **comment_video**: Auto-find comment box, type and submit a comment
 
 ## Rules
-1. Match requests accurately (e.g., "2nd video" -> count [VIDEO] items).
-2. Answer in user's language. Use Markdown.
-3. If tool fails, explain and suggest alternative.`;
+1. Use element index numbers from the DOM Map directly — no need to scan first.
+2. When matching user requests like \"video thứ 2\", count [VIDEO] elements in MAIN CONTENT section.
+3. For social media actions (like, comment, subscribe), prefer specialized tools.
+4. Answer in the same language the user uses.
+5. Use Markdown formatting for readability.
+6. If a tool fails, explain what happened and suggest alternatives.
+7. Never fabricate information about what's on the page.`;
